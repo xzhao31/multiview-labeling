@@ -21,7 +21,7 @@ import pyproj
 
 ## Path constants
 # Where all the data is stored
-PROJECT_FOLDER = Path("/headless/persistent/timm/hawaii_automate_metashape").resolve()
+PROJECT_FOLDER = Path("/headless/persistent/timm/hawaii_automate_metashape/multiview-labeling/example_hawaii").resolve()
 # Where to save vis data
 VIS_FOLDER = Path("/headless/geograypher-vis").resolve()
 # Where to cache results
@@ -95,26 +95,16 @@ def ortho_mask(cropped_ortho, bbox, bottomleft, geo_transform):
     ### segment to find region of interest
     ortho_mask = sam.mask(cropped_ortho)
     ortho_mask = ortho_mask[20:-20,20:-20,0]
-    cv2.imwrite('test_mask_before.png',ortho_mask)
     # morphological processing to fill in gaps
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (4,4))
     ortho_mask = cv2.morphologyEx(ortho_mask, cv2.MORPH_CLOSE, kernel)
     ortho_mask = cv2.morphologyEx(ortho_mask, cv2.MORPH_OPEN, kernel)
-    cv2.imwrite('test_mask_after.png',ortho_mask)
     # find contours
     contours, hierarchy = cv2.findContours(ortho_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     largest_contour = max(contours, key=cv2.contourArea)
     epsilon = 0.001*cv2.arcLength(largest_contour,True)
     largest_contour = cv2.approxPolyDP(largest_contour,epsilon,True)
-    # largest_contour = cv2.approxPolyDP(largest_contour,32,True)
-    ###
-    # print(largest_contour.dtype)
-    # print(largest_contour[0].dtype)
-    # print(largest_contour[0][0].dtype)
-    # return
-    ###
     ortho_contour = cv2.drawContours(cropped_ortho.copy(), [largest_contour], -1, (0,255,0), 3)
-    cv2.imwrite('test_ortho_contours.png',ortho_contour)
     # find og img coords (offset by top left) and convert to geo
     x0,y0 = bottomleft
     geo_polygon = []

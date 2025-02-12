@@ -98,7 +98,7 @@ class Ortho(Scatter):
                 self.main_app.all_bboxes[img_coord] = (geo_coord,img_contour,geo_contour,row['species_observed'])
 
         # load up orthos
-        self.ortho_raster = rasterio.open(main_app.project_directory+'/exports/orthomosaic.tif')
+        self.ortho_raster = rasterio.open(main_app.project_directory+'exports/orthomosaic.tif')
         self.raw_ortho = self.ortho_raster.read().transpose(1, 2, 0)[:, :, :3][:, :, [2, 1, 0]]
         self.labeled_ortho = self.raw_ortho.copy()
         for (x0,y0,x1,y1),(geo_coords,img_contour,geo_contour,label) in self.main_app.all_bboxes.items():
@@ -193,7 +193,6 @@ class Ortho(Scatter):
                 self.main_app.current_bbox['img_bbox'] = (x0,y0,x1,y1)
                 self.main_app.current_bbox['geo_bbox'] = (self.ortho_raster.transform*(x0,y0)+self.ortho_raster.transform*(x1,y1))
                 ## for debugging only
-                cv2.imwrite('test_ortho_cropped.png',self.raw_ortho[y0-20:y1+20,x0-20:x1+20,:])
                 print(f'bottom left is ({x0},{y0})')
                 print(self.main_app.current_bbox['geo_bbox'])
                 # find roi
@@ -404,4 +403,4 @@ class SideViews(StackLayout):
 
         
 if __name__ == '__main__':
-    Main().run()
+    Main(project_directory='./example_hawaii/').run()
