@@ -192,9 +192,9 @@ class Ortho(Scatter):
                 x0,x1,y0,y1 = min(self.x0,x),max(self.x0,x),min(self.y0,y),max(self.y0,y)
                 self.main_app.current_bbox['img_bbox'] = (x0,y0,x1,y1)
                 self.main_app.current_bbox['geo_bbox'] = (self.ortho_raster.transform*(x0,y0)+self.ortho_raster.transform*(x1,y1))
-                ## for debugging only
-                print(f'bottom left is ({x0},{y0})')
-                print(self.main_app.current_bbox['geo_bbox'])
+                ## for debugging
+                print(f"img_bbox (x0,y0,x1,y1) is {self.main_app.current_bbox['img_bbox']}")
+                print(f"geo_bbox is {self.main_app.current_bbox['geo_bbox']}")
                 # find roi
                 img_contour,mask_roi = render_sideviews.ortho_mask(self.raw_ortho[y0-20:y1+20,x0-20:x1+20,:], self.main_app.current_bbox['geo_bbox'], (x0,y0), self.ortho_raster.transform)
                 img_contour = np.array([[x+x0-20,y+y0-20] for [[x,y]] in img_contour])

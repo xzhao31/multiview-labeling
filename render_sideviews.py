@@ -14,8 +14,9 @@ import tempfile as tmp
 # Library imports
 from geograypher.cameras.derived_cameras import MetashapeCameraSet
 from geograypher.meshes import TexturedPhotogrammetryMesh
-from geograypher.meshes.derived_meshes import TexturedPhotogrammetryMeshChunked
-from geograypher.utils.visualization import show_segmentation_labels
+# from geograypher.meshes.derived_meshes import TexturedPhotogrammetryMeshChunked
+from tqdm import tqdm
+from skimage.transform import resizec
 
 import pyproj
 
@@ -46,8 +47,6 @@ IDS_TO_LABELS = {
     2: "B",
 }
 
-## set constants
-
 ## Parameters to control the outputs
 # Repeat the labeling process
 RETEXTURE = True
@@ -55,7 +54,7 @@ RETEXTURE = True
 # Something is off about the elevation between the mesh and the DTM, this should be a threshold in meters above ground
 HEIGHT_ABOVE_GROUND_THRESH = -float("inf")
 # The image is downsampled to this fraction for accelerated rendering
-RENDER_IMAGE_SCALE = 0.2 # 0.1 shows no views?
+RENDER_IMAGE_SCALE = 0.1
 # Portions of the mesh within this distance of the labels are used for rendering
 MESH_BUFFER_RADIUS_METER = 5
 # Cameras within this radius of the annotations are used for training
@@ -77,17 +76,15 @@ DTM_FILE = Path(PROJECT_FOLDER, "exports", f"{RUN_NAME}_dsm-mesh.tif")
 # The image folder used to create the Metashape project
 IMAGE_FOLDER = Path(PROJECT_FOLDER, "photos")
 
-## Outputs
-PREDICTED_VECTOR_LABELS_FILE = Path(PROJECT_FOLDER, "outputs", "predicted_labels.geojson")
+## Define the intermediate results
+# Processed geo file
+labeled_mesh_file = Path(PROJECT_FOLDER, "intermediate","labeled_mesh.ply")
+# Where to save the rendering label images
+rendered_labels_folder = Path(PROJECT_FOLDER, "intermediate","rendered_labels",)
 
-EXAMPLE_INTRINSICS = {
-    "f": 1000,
-    "cx": 0,
-    "cy": 0,
-    "image_width": 800,
-    "image_height": 600,
-    "distortion_params": {},
-}
+## Outputs
+# PREDICTED_VECTOR_LABELS_FILE = Path(PROJECT_FOLDER, "outputs", "predicted_labels.geojson")
+
 
 def ortho_mask(cropped_ortho, bbox, bottomleft, geo_transform):
     start_time = time.time()
@@ -133,13 +130,14 @@ def ortho_mask(cropped_ortho, bbox, bottomleft, geo_transform):
 
 def sideviews(mask_roi):
     start_time = time.time()
-    intermediate_folder = tmp.TemporaryDirectory().name
-    rendered_labels_folder = Path(intermediate_folder,"rendered_labels",)
-    labeled_mesh_file = Path(intermediate_folder,"labeled_mesh.ply")
-    cache_folder = Path(intermediate_folder,"cache",)
+    # intermediate_folder = tmp.TemporaryDirectory().name
+    # with tmp.TemporaryDirectory() as intermediate_folder:
+    # rendered_labels_folder = Path(intermediate_folder,"rendered_labels",)
+    # labeled_mesh_file = Path(intermediate_folder,"labeled_mesh.ply")
+    # cache_folder = Path(intermediate_folder,"cache",)
+    # rendered_labels_folder.mkdir(exist_ok=True)
+    # cache_folder.mkdir(exist_ok=True)
 
-    # mesh
-    MESH_BUFFER_RADIUS_METER = 5
     # Create a labeled version of the mesh from the field data
     # if not present or requested
     if not Path(labeled_mesh_file).is_file() or RETEXTURE:
@@ -193,36 +191,87 @@ def sideviews(mask_roi):
     training_camera_set = camera_set.get_subset_ROI(
         ROI=mask_roi, buffer_radius=CAMERAS_BUFFER_RADIUS_METERS
     )
+
     # # Show the camera set
     # training_camera_set.vis(force_xvfb=True, frustum_scale=0.5)
-
-    # ## visualize mesh
+    # # Visualize mesh
     # mesh.vis(camera_set=training_camera_set, force_xvfb=True)
 
-    ## save renders
+    ## render_flat -- NEW
+    print("using render_flat (NEW)")
+    render_gen = mesh.render_flat(
+        cameras=training_camera_set,
+        # batch_size=4,
+        render_img_scale=RENDER_IMAGE_SCALE,
+        # save_to_cache=True,
+        # cache_folder=cache_folder
+        )
+
+    out = []
+    for i,rendered in enumerate(
+        tqdm(
+            render_gen,
+            total=len(training_camera_set),
+            desc="Computing renders",
+        )
+    ):
+        native_size = training_camera_set[i].get_image_size()
+        rendered = resize(
+            rendered,
+            native_size,
+            order=(0 if mesh.is_discrete_texture() else 1),
+        )
+        if rendered.ndim == 3:
+            rendered = rendered[..., :3]
+        mask = np.logical_or.reduce([
+            rendered < 0,
+            rendered > 255,
+            np.logical_not(np.isfinite(rendered)),
+        ])
+        rendered[mask] = NULL_TEXTURE_INT_VALUE
+        rendered = np.squeeze(rendered.astype(np.uint8))
+
+        filename = training_camera_set.get_image_filename(i, absolute=False)
+        mask = np.stack((255-rendered,)*3, axis=-1)
+        if mask.max() != 0: # the object of interest actually exists in the photo
+            y_indices, x_indices, _ = np.nonzero(mask)
+            mask_cropped = mask[min(y_indices):max(y_indices),min(x_indices):max(x_indices),:]
+            rgb_cropped = cv2.imread(Path(IMAGE_FOLDER,filename))[min(y_indices):max(y_indices),min(x_indices):max(x_indices),:]
+            rgb_masked = 0.5*mask_cropped/255*rgb_cropped + 0.5*rgb_cropped
+            contours, hierarchy = cv2.findContours(mask_cropped[:,:,0], cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            largest_contour = max(contours, key=cv2.contourArea)
+            epsilon = 0.001*cv2.arcLength(largest_contour,True)
+            largest_contour = cv2.approxPolyDP(largest_contour,epsilon,True)
+            masked_contour = cv2.drawContours(rgb_masked, [largest_contour], -1, (0,0,255), 3)
+            out.append(masked_contour)
+            if i>=10:
+                break
+    print(i, 'views')
+    end_time = time.time()
+    print('rendering sideviews took', end_time-start_time, 'seconds')
+    return out
+
+
+    # # save renders OLD -- WORKS
+    # print("using save_renders (OLD)")
     # np._set_promotion_state("legacy")  # required to prevent overflow errors
     # mesh.save_renders(
     #     camera_set=training_camera_set,
     #     render_image_scale=RENDER_IMAGE_SCALE,
-    #     save_native_resolution=False, # upsamples mask to og
+    #     save_native_resolution=True, # upsamples mask to og
     #     output_folder=rendered_labels_folder,
     # )
-    # TODO put in memory
-    ## render_flat
-    masks = mesh.render_flat(
-        cameras=training_camera_set,
-        batch_size=4,
-        render_img_scale=0.25,
-        save_to_cache=True,
-        cache_folder=cache_folder # will create if not
-        )
-
     # i=0
     # multiviews=[]
     # for file in os.listdir(Path(rendered_labels_folder,'100MEDIA')):
     #     mask = 255-cv2.imread(Path(rendered_labels_folder,'100MEDIA',file))
     #     if mask.max()!=0: # the object of interest actually exists in the photo
     #         print(file)
+    #         # ###
+    #         # rgb = cv2.imread(Path(IMAGE_FOLDER,'100MEDIA',file[:-3]+'JPG'))
+    #         # rgb_masked = 0.5*rgb + 0.5*rgb*mask
+    #         # multiviews.append(rgb_masked)
+    #         # ###
     #         y_indices, x_indices, _ = np.nonzero(mask)
     #         mask_cropped = mask[min(y_indices):max(y_indices),min(x_indices):max(x_indices),:]
     #         rgb_cropped = cv2.imread(Path(IMAGE_FOLDER,'100MEDIA',file[:-3]+'JPG'))[min(y_indices):max(y_indices),min(x_indices):max(x_indices),:]
@@ -234,12 +283,27 @@ def sideviews(mask_roi):
     #         masked_contour = cv2.drawContours(rgb_masked, [largest_contour], -1, (0,0,255), 3)
     #         multiviews.append(masked_contour)
     #         i+=1
-            # if i>=10:
-            #     break
+    #         if i>=10:
+    #             break
+    # print(i, 'views')
+    # end_time = time.time()
+    # print('rendering sideviews took', end_time-start_time, 'seconds')
+    # return multiviews
 
-    print(i, 'views')
-    end_time = time.time()
-    print('rendering sideviews took', end_time-start_time, 'seconds')
-    if len(multiviews) < 2:
-        pass
-    return multiviews
+# import rasterio
+# x0,y0,x1,y1 = 5816,6299,6111,6508
+# geo_bbox = (-155.28370436698305, 19.4468668556957, -155.28364268130306, 19.446825399082698)
+# ortho_raster = rasterio.open('example_hawaii/exports/orthomosaic.tif')
+# raw_ortho = ortho_raster.read().transpose(1, 2, 0)[:, :, :3][:, :, [2, 1, 0]]
+
+# # find roi
+# img_contour,mask_roi = ortho_mask(raw_ortho[y0-20:y1+20,x0-20:x1+20,:], geo_bbox, (x0,y0), ortho_raster.transform)
+
+# # render sideviews
+# multiviews = sideviews(mask_roi)
+# cv2.imwrite('debug/sideview_0.png',multiviews[0])
+# cv2.imwrite('debug/sideview_1.png',multiviews[1])
+# cv2.imwrite('debug/sideview_2.png',multiviews[2])
+# cv2.imwrite('debug/sideview_3.png',multiviews[3])
+# cv2.imwrite('debug/sideview_4.png',multiviews[4])
+# cv2.imwrite('debug/sideview_5.png',multiviews[5])
