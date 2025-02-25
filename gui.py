@@ -21,6 +21,11 @@ from multiprocessing import Process, Queue
 import render_sideviews
 import os
 
+## debug
+import pandas as pd
+pd.set_option("display.max_columns", None) # show all cols
+# pd.set_option('display.max_colwidth', None) # show full width of showing cols
+# pd.set_option("display.expand_frame_repr", False) # print cols side by side as it's supposed to be
 
 def run_sideviews_in_process(q, *args, **kwargs):
     multiviews = render_sideviews.sideviews(*args, **kwargs)
@@ -34,15 +39,14 @@ class Main(App):
         super().__init__(**kwargs)
         # customizable inputs
         self.project_directory = project_directory
-        self.colors = colors
+        self.colors = {i:tuple(val/255 for val in color) for i,color in enumerate(colors)}
         self.labels = labels
+        self.label_ids = {label:i for i,label in enumerate(labels)}
+        self.id_labels = {i:label for i,label in enumerate(labels)}
         # initialize other variables
-        self.all_bboxes = {} # img_bbox (x0,y0,x1,y1) : (geo_bbox (long0,lat0,long1,lat1), img_contour (contour), geo_contour (Polygon), label (str))
-        self.current_bbox = {'img_bbox': None, 'geo_bbox': None, 'img_contour': None, 'geo_contour': None}
+        self.all_bboxes = {} # img_bbox (x0,y0,x1,y1) : (geo_bbox (long0,lat0,long1,lat1), img_contour (contour), label_id (int))
+        self.current_bbox = {'img_bbox': None, 'geo_bbox': None, 'img_contour': None}
         self.labeling = False
-        self.label_color = {}
-        for label,color in zip(self.labels,self.colors):
-            self.label_color[label]=tuple(val/255 for val in color)
     
     def build(self):
         layout = BoxLayout(orientation='horizontal')
@@ -94,15 +98,14 @@ class Ortho(Scatter):
                     x,y = coords.split()
                     img_contour.append([int(x),int(y)])
                 img_contour = np.array(img_contour, np.int32)
-                geo_contour = row['contour_polygons']
-                self.main_app.all_bboxes[img_coord] = (geo_coord,img_contour,geo_contour,row['species_observed'])
+                self.main_app.all_bboxes[img_coord] = (geo_coord,img_contour,row['observed_tree_id'])
 
         # load up orthos
         self.ortho_raster = rasterio.open(main_app.project_directory+'exports/orthomosaic.tif')
         self.raw_ortho = self.ortho_raster.read().transpose(1, 2, 0)[:, :, :3][:, :, [2, 1, 0]]
         self.labeled_ortho = self.raw_ortho.copy()
-        for (x0,y0,x1,y1),(geo_coords,img_contour,geo_contour,label) in self.main_app.all_bboxes.items():
-            color = [_*255 for _ in self.main_app.label_color[label][2::-1]]
+        for (x0,y0,x1,y1),(geo_coords,img_contour,label) in self.main_app.all_bboxes.items():
+            color = [_*255 for _ in self.main_app.colors[label][2::-1]]
             cv2.rectangle(self.labeled_ortho, (x0,y0), (x1,y1), color, 20)
             cv2.drawContours(self.labeled_ortho, [img_contour], 0, color, 3)
         self.working_ortho = self.labeled_ortho.copy()
@@ -118,8 +121,8 @@ class Ortho(Scatter):
     
     def reload_trees(self,region=None):
         self.labeled_ortho = self.raw_ortho.copy()
-        for (x0,y0,x1,y1),(geo_coords,img_contour,geo_contour,label) in self.main_app.all_bboxes.items():
-            cv2.rectangle(self.labeled_ortho, (x0,y0), (x1,y1), [_*255 for _ in self.main_app.label_color[label][2::-1]], 20)
+        for (x0,y0,x1,y1),(geo_coords,img_contour,label) in self.main_app.all_bboxes.items():
+            cv2.rectangle(self.labeled_ortho, (x0,y0), (x1,y1), [_*255 for _ in self.main_app.colors[label][2::-1]], 20)
             # TODO - add contours
         self.working_ortho = self.labeled_ortho.copy()
         self.update(region)
@@ -171,9 +174,10 @@ class Ortho(Scatter):
     def on_touch_up(self,touch):
         x,y = self.to_image_coords(touch.x, touch.y)
         if self.collide_point(*touch.pos):
+            # clicked on existing bbox -- edit
             if self.x0==x and self.y0==y:
                 self.drawing = False
-                for img_coords,(geo_coords,img_contour,geo_contour,_) in self.main_app.all_bboxes.items():
+                for img_coords,(geo_coords,img_contour,_) in self.main_app.all_bboxes.items():
                     x0,y0,x1,y1 = img_coords
                     if (x0<=x<=x1 and (-10<y-y0<10 or -10<y-y1<10)) or (y0<=y<=y1 and (-10<x-x0<10 or -10<x-x1<10)): # previous bbox
                         self.main_app.labeling = True
@@ -182,10 +186,11 @@ class Ortho(Scatter):
                         cv2.rectangle(self.working_ortho, (x0,y0), (x1,y1), (0, 0, 255), 20)
                         cv2.drawContours(self.working_ortho, [img_contour], 0, (0,0,255), 3)
                         self.update()
-                        self.main_app.current_bbox = {'img_bbox':img_coords, 'geo_bbox':geo_coords, 'img_contour':img_contour, 'geo_contour':geo_contour}
+                        self.main_app.current_bbox = {'img_bbox':img_coords, 'geo_bbox':geo_coords, 'img_contour':img_contour}
                         self.main_app.main_tools.update_instructions("update label")
                         return True
-            elif self.drawing: # end drawing bbox
+            # ended drawing bbox -- generate sideviews and label
+            elif self.drawing:
                 self.drawing = False
                 self.main_app.side_views.loading_views()
                 self.main_app.main_tools.update_instructions("loading side views")
@@ -195,11 +200,10 @@ class Ortho(Scatter):
                 ## for debugging
                 print(f"img_bbox (x0,y0,x1,y1) is {self.main_app.current_bbox['img_bbox']}")
                 print(f"geo_bbox is {self.main_app.current_bbox['geo_bbox']}")
-                # find roi
+                # segment to find roi
                 img_contour,mask_roi = render_sideviews.ortho_mask(self.raw_ortho[y0-20:y1+20,x0-20:x1+20,:], self.main_app.current_bbox['geo_bbox'], (x0,y0), self.ortho_raster.transform)
                 img_contour = np.array([[x+x0-20,y+y0-20] for [[x,y]] in img_contour])
                 self.main_app.current_bbox['img_contour'] = img_contour
-                self.main_app.current_bbox['geo_contour'] = mask_roi
                 cv2.drawContours(self.working_ortho, [img_contour], 0, (0,0,255), 3)
                 self.update((x0,y0))
                 # render sideviews
@@ -213,8 +217,9 @@ class Ortho(Scatter):
                 # solicit labeling input
                 self.main_app.labeling = True
                 self.main_app.labeling_tools.update_btns()
-                self.main_app.main_tools.update_instructions("select a label")     
-            elif self.do_translation: # end panning
+                self.main_app.main_tools.update_instructions("select a label")   
+            # end panning  
+            elif self.do_translation:
                 self.do_translation = False
             return True
 
@@ -262,17 +267,16 @@ class MainTools(BoxLayout):
         self.rect.size = instance.size
     
     def export_btn(self,event):
-        all_img_coords,all_geo_coords,ids,labels,img_contours,bbox_polygons,contour_polygons = [],[],[],[],[],[],[]
-        for img_coords,(geo_coords,img_contour,geo_contour,label) in self.main_app.all_bboxes.items():
+        all_img_coords,all_geo_coords,ids,labels,img_contours,bbox_polygons = [],[],[],[],[],[]
+        for img_coords,(geo_coords,img_contour,label_id) in self.main_app.all_bboxes.items():
             all_img_coords.append(str(img_coords)[1:-1])
             x0,y0,x1,y1 = img_coords
             all_geo_coords.append(str(geo_coords)[1:-1])
             long0,lat0,long1,lat1 = geo_coords
-            ids.append(0) ## #
-            labels.append(label)
+            ids.append(label_id)
+            labels.append(self.main_app.id_labels[label_id])
             img_contours.append(str(img_contour).replace("]\n [", ",")[2:-2])
             bbox_polygons.append(Polygon(((long0,lat0),(long1,lat0),(long1,lat1),(long0,lat1))))
-            contour_polygons.append(geo_contour) 
         labels = gpd.GeoDataFrame({
             'observed_tree_id': ids,
             'species_observed': labels,
@@ -280,11 +284,10 @@ class MainTools(BoxLayout):
             'geo_coords': all_geo_coords,
             'img_contours': img_contours,
             'bbox_polygons': bbox_polygons,
-            'contour_polygons': contour_polygons
         }, crs='EPSG:4326', geometry='bbox_polygons')
+        print(labels.head())
         labels.to_file(self.main_app.project_directory+'labels.gpkg', driver='GPKG')
         self.main_app.main_tools.update_instructions('saved!')
-        print(labels.head())
         
 class LabelingTools(BoxLayout):
     def __init__(self, main_app, **kwargs):
@@ -303,10 +306,12 @@ class LabelingTools(BoxLayout):
         btn.bind(on_press=self.delete_btn)
         self.buttons.append(btn)
         # labeling buttons
-        for label,color in self.main_app.label_color.items():
-            btn = Button(text=label,background_color=color,background_normal='',disabled=not self.main_app.labeling,font_size=12)
+        for label_id,color in self.main_app.colors.items():
+            btn = Button(text=self.main_app.id_labels[label_id],background_color=color,background_normal='',disabled=not self.main_app.labeling,font_size=12)
             btn.bind(on_press=self.label_btn)
             self.buttons.append(btn)
+            if label_id >= len(self.main_app.labels)-1:
+                break
         for button in self.buttons:
             self.add_widget(button)
     
@@ -321,7 +326,7 @@ class LabelingTools(BoxLayout):
             # reset
             self.main_app.left_orthomosaic.working_ortho = self.main_app.left_orthomosaic.labeled_ortho.copy()
             self.main_app.left_orthomosaic.update(self.main_app.current_bbox['img_bbox'][0:2])
-            self.main_app.current_bbox = {'img_bbox': None, 'geo_bbox': None, 'img_contour': None, 'geo_contour': None}
+            self.main_app.current_bbox = {'img_bbox': None, 'geo_bbox': None, 'img_contour': None}
             self.main_app.side_views.reset_views()
 
     def label_btn(self,event):
@@ -329,7 +334,7 @@ class LabelingTools(BoxLayout):
             self.main_app.labeling = False
             self.update_btns()
             # classify
-            self.main_app.all_bboxes[self.main_app.current_bbox['img_bbox']] = (self.main_app.current_bbox['geo_bbox'],self.main_app.current_bbox['img_contour'],self.main_app.current_bbox['geo_contour'],event.text)
+            self.main_app.all_bboxes[self.main_app.current_bbox['img_bbox']] = (self.main_app.current_bbox['geo_bbox'],self.main_app.current_bbox['img_contour'],self.main_app.label_ids[event.text])
             self.main_app.main_tools.update_instructions(f'Added box as {event.text}')
             # update
             x0,y0 = self.main_app.current_bbox['img_bbox'][0:2]
@@ -338,7 +343,7 @@ class LabelingTools(BoxLayout):
             cv2.drawContours(self.main_app.left_orthomosaic.labeled_ortho, [self.main_app.current_bbox['img_contour']], 0, color, 3)
             self.main_app.left_orthomosaic.working_ortho = self.main_app.left_orthomosaic.labeled_ortho.copy()
             self.main_app.left_orthomosaic.update(self.main_app.current_bbox['img_bbox'][0:2])
-            self.main_app.current_bbox = {'img_bbox': None, 'geo_bbox': None, 'img_contour': None, 'geo_contour': None}
+            self.main_app.current_bbox = {'img_bbox': None, 'geo_bbox': None, 'img_contour': None}
             self.main_app.side_views.reset_views()
 
     def delete_btn(self,event):
@@ -350,7 +355,7 @@ class LabelingTools(BoxLayout):
             self.main_app.all_bboxes.pop(self.main_app.current_bbox['img_bbox'], None)
             # update
             self.main_app.left_orthomosaic.reload_trees(self.main_app.current_bbox['img_bbox'][0:2])
-            self.main_app.current_bbox = {'img_bbox': None, 'geo_bbox': None, 'img_contour': None, 'geo_contour': None}
+            self.main_app.current_bbox = {'img_bbox': None, 'geo_bbox': None, 'img_contour': None}
 
 class SideViews(StackLayout):
     def __init__(self, **kwargs):
