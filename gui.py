@@ -8,7 +8,6 @@ from kivy.uix.scatter import Scatter
 from kivy.uix.stencilview import StencilView
 from kivy.graphics.texture import Texture
 from kivy.graphics import Color, Rectangle
-from kivy.clock import Clock
 from kivy.config import Config
 Config.set('input', 'mouse', 'mouse,multitouch_on_demand')
 
@@ -18,7 +17,7 @@ import numpy as np
 import geopandas as gpd
 from shapely.geometry import Polygon
 from multiprocessing import Process, Queue
-import render_sideviews
+import render_sideviews # render_sideviews.py
 import os
 
 # ## debug
@@ -31,7 +30,6 @@ def run_sideviews_in_process(q, *args, **kwargs):
     print("finished getting multiviews")
     q.put(multiviews)
     print("finished queueing multiviews")
-
 
 class Main(App):
     def __init__(self,project_directory='./',labels=['Category 1', 'Category 2', 'Category 3'], colors=[(152,126,181),(255,230,114),(104,146,182),(247,236,225)], **kwargs):

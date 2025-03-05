@@ -24,46 +24,27 @@ VIS_FOLDER = Path("/headless/geograypher-vis").resolve()
 # Where to cache results
 CACHE_FOLDER = Path("/headless/geograypher-cache").resolve()
 
-VERT_ID = "vert_ID"
-CLASS_ID_KEY = "class_ID"
-INSTANCE_ID_KEY = "instance_ID"
-PRED_CLASS_ID_KEY = "pred_class_ID"
-CLASS_NAMES_KEY = "class_names"
-RATIO_3D_2D_KEY = "ratio_3d_2d"
 NULL_TEXTURE_INT_VALUE = 255
-LAT_LON_CRS = pyproj.CRS.from_epsg(4326)
-EARTH_CENTERED_EARTH_FIXED_CRS = pyproj.CRS.from_epsg(4978)
-
 # Name of the column to use in the example data # Render data from this column in the geofile to each image
 LABEL_COLUMN_NAME = "species_observed"
 
 ## Parameters to control the outputs
-# Repeat the labeling process
-RETEXTURE = True
-# Points less than this height above the DTM are considered ground
-# Something is off about the elevation between the mesh and the DTM, this should be a threshold in meters above ground
-HEIGHT_ABOVE_GROUND_THRESH = -float("inf")
 # The image is downsampled to this fraction for accelerated rendering
 RENDER_IMAGE_SCALE = 0.1
 # Portions of the mesh within this distance of the labels are used for rendering
 MESH_BUFFER_RADIUS_METER = 5
-# Cameras within this radius of the annotations are used for training
+# Cameras within this radius of the annotations are used for sideviews
 CAMERAS_BUFFER_RADIUS_METERS = 50
 # Downsample target
-# DOWNSAMPLE_TARGET = 0.25
-DOWNSAMPLE_TARGET = 0.5
+DOWNSAMPLE_TARGET = 0.25
 
 ## Define the inputs
 # The automate-metashape run name and timestamp
 RUN_NAME = "run-001_20240930T1143"
-# # The file containing geospatial labels # The input labels
-# LABELS_FILE = Path(PROJECT_FOLDER, "labels.gpkg")
 # The mesh exported from Metashape
 MESH_FILE = Path(PROJECT_FOLDER, "exports", f"{RUN_NAME}_model_local.ply")
 # The camera file exported from Metashape
 CAMERAS_FILE = Path(PROJECT_FOLDER, "exports", f"{RUN_NAME}_cameras.xml")
-# The digital elevation map exported by Metashape
-DTM_FILE = Path(PROJECT_FOLDER, "exports", f"{RUN_NAME}_dsm-mesh.tif")
 # The image folder used to create the Metashape project
 IMAGE_FOLDER = Path(PROJECT_FOLDER, "photos")
 
@@ -162,7 +143,6 @@ def sideviews(mask_roi):
         cameras=camera_subset,
         batch_size=1,
         render_img_scale=RENDER_IMAGE_SCALE,
-        # save_to_cache=True,
     )
 
     # loop through masks (from render_gen) to output a usable image
@@ -185,6 +165,10 @@ def sideviews(mask_roi):
             y_min, y_max, x_min, x_max = y_indices.min(), y_indices.max(), x_indices.min(), x_indices.max()
             mask_cropped = mask[y_min:y_max+1, x_min:x_max+1]
             rgb_cropped = cv2.imread(str(Path(IMAGE_FOLDER, filename)))[y_min:y_max+1, x_min:x_max+1]
+            # cv2.imwrite('debug/rgb_cropped.png',rgb_cropped)
+            # rgb_mask = sam.mask(rgb_cropped)
+            # cv2.imwrite('debug/rgb_mask.png',rgb_mask)
+            # rgb_masked = 0.5*rgb_cropped + 0.5*rgb_mask/255*rgb_cropped
             mask_3d = np.stack([mask_cropped] * 3, axis=-1)
             rgb_masked = np.where(mask_3d, rgb_cropped, rgb_cropped // 2)
 
