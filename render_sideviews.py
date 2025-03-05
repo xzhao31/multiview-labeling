@@ -5,7 +5,7 @@ from shapely.geometry import Polygon
 import pyproj
 from pathlib import Path
 import cv2
-import sam
+import sam # sam.py
 import time
 from tqdm import tqdm
 
@@ -50,7 +50,8 @@ MESH_BUFFER_RADIUS_METER = 5
 # Cameras within this radius of the annotations are used for training
 CAMERAS_BUFFER_RADIUS_METERS = 50
 # Downsample target
-DOWNSAMPLE_TARGET = 0.25
+# DOWNSAMPLE_TARGET = 0.25
+DOWNSAMPLE_TARGET = 0.5
 
 ## Define the inputs
 # The automate-metashape run name and timestamp
@@ -70,7 +71,7 @@ IMAGE_FOLDER = Path(PROJECT_FOLDER, "photos")
 # # Processed geo file
 # LABELED_MESH_FILE = Path(PROJECT_FOLDER, "intermediate","labeled_mesh.ply")
 # Where to save the rendering label images
-RENDERED_LABELS_FOLDER = Path(PROJECT_FOLDER, "intermediate","rendered_labels",)
+# RENDERED_LABELS_FOLDER = Path(PROJECT_FOLDER, "intermediate","rendered_labels",)
 
 # Create camera set
 CAMERA_SET = MetashapeCameraSet(CAMERAS_FILE, IMAGE_FOLDER)
@@ -109,7 +110,6 @@ def ortho_mask(cropped_ortho, bbox, bottomleft, geo_transform):
     x0,y0 = bottomleft
     geo_polygon = []
     for i,[[x,y]] in enumerate(largest_contour):
-        geo_transform*(x+x0,y+y0)
         geo_polygon.append(geo_transform*(x+x0,y+y0))
     # create new geo mask
     mask_roi = gpd.GeoDataFrame({
@@ -160,20 +160,22 @@ def sideviews(mask_roi):
     # Generate sideview masks
     render_gen = mesh.render_flat(
         cameras=camera_subset,
-        batch_size=4,
+        batch_size=1,
         render_img_scale=RENDER_IMAGE_SCALE,
-        save_to_cache=True,
+        # save_to_cache=True,
     )
 
     # loop through masks (from render_gen) to output a usable image
     out = []
     for i,rendered in enumerate(tqdm(render_gen, total=len(camera_subset), desc="Computing renders",)):
+        if i%2==0:
+            continue
         native_size = camera_subset[i].get_image_size()
         rendered = resize(rendered,native_size,order=(0 if mesh.is_discrete_texture() else 1),)
         if rendered.ndim == 3:
             rendered = rendered[..., :3]
-        mask = np.logical_or.reduce([rendered < 0, rendered > 255, np.logical_not(np.isfinite(rendered)),])
-        rendered[mask] = NULL_TEXTURE_INT_VALUE
+        invalid = np.logical_or.reduce([rendered < 0, rendered > 255, ~np.isfinite(rendered)])
+        rendered[invalid] = NULL_TEXTURE_INT_VALUE
         rendered = rendered.astype(np.uint8)
         mask = np.all(rendered != NULL_TEXTURE_INT_VALUE, axis=-1)
         if np.any(mask):
@@ -185,6 +187,7 @@ def sideviews(mask_roi):
             rgb_cropped = cv2.imread(str(Path(IMAGE_FOLDER, filename)))[y_min:y_max+1, x_min:x_max+1]
             mask_3d = np.stack([mask_cropped] * 3, axis=-1)
             rgb_masked = np.where(mask_3d, rgb_cropped, rgb_cropped // 2)
+
             # add contours from the mask to the image
             contours, _ = cv2.findContours(mask_cropped.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             largest_contour = max(contours, key=cv2.contourArea)
@@ -192,9 +195,10 @@ def sideviews(mask_roi):
             largest_contour = cv2.approxPolyDP(largest_contour, epsilon, True)
             cv2.drawContours(rgb_masked, [largest_contour], -1, (0, 0, 255), 3)
             out.append(rgb_masked)
-            # limit to 10
-            if i>=10:
-                break
+
+            # # limit to 10
+            # if i>=10:
+            #     break
     
     end_time = time.time()
     print(f'rendering {i} sideviews took {end_time-start_time} seconds')

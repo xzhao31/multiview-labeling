@@ -21,11 +21,10 @@ from multiprocessing import Process, Queue
 import render_sideviews
 import os
 
-## debug
-import pandas as pd
-pd.set_option("display.max_columns", None) # show all cols
-# pd.set_option('display.max_colwidth', None) # show full width of showing cols
-# pd.set_option("display.expand_frame_repr", False) # print cols side by side as it's supposed to be
+# ## debug
+# import pandas as pd
+# pd.set_option("display.max_columns", None) # show all cols
+import time
 
 def run_sideviews_in_process(q, *args, **kwargs):
     multiviews = render_sideviews.sideviews(*args, **kwargs)
@@ -200,6 +199,7 @@ class Ortho(Scatter):
                 ## for debugging
                 print(f"img_bbox (x0,y0,x1,y1) is {self.main_app.current_bbox['img_bbox']}")
                 print(f"geo_bbox is {self.main_app.current_bbox['geo_bbox']}")
+                cv2.imwrite('debug/ortho.png', self.raw_ortho[y0-20:y1+20,x0-20:x1+20,:])
                 # segment to find roi
                 img_contour,mask_roi = render_sideviews.ortho_mask(self.raw_ortho[y0-20:y1+20,x0-20:x1+20,:], self.main_app.current_bbox['geo_bbox'], (x0,y0), self.ortho_raster.transform)
                 img_contour = np.array([[x+x0-20,y+y0-20] for [[x,y]] in img_contour])
