@@ -1,0 +1,6 @@
+.DS_Store
+__pycache__
+assets
+debug
+example_hawaii
+labeled_mesh_IDs_to_labels.json
