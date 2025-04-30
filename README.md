@@ -10,4 +10,5 @@ sam.py uses efficientvit (see https://github.com/mit-han-lab/efficientvit) to se
 
 Demo of the app working in real time
 
-![demo](https://github.com/user-attachments/assets/58c2c591-f913-40be-930a-279a65b99e7b){width=80%}
+<!-- ![demo](./demo.gif width="80%") -->
+<img src="./demo.gif"  width="70%">
